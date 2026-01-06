@@ -1,539 +1,262 @@
-<div align="center">
-
 # Sleepless Agent
 
-**A 24/7 AgentOS that works while you sleep**
+**Minimal Claude Code Continuous Execution Supervisor Runtime**
 
-[![Documentation](https://img.shields.io/badge/Documentation-007ACC?style=for-the-badge&logo=markdown&logoColor=white)](https://context-machine-lab.github.io/sleepless-agent/)
-[![DeepWiki](https://img.shields.io/badge/DeepWiki-582C83?style=for-the-badge&logo=wikipedia&logoColor=white)](https://deepwiki.com/context-machine-lab/sleepless-agent)
-[![WeChat](https://img.shields.io/badge/WeChat-07C160?style=for-the-badge&logo=wechat&logoColor=white)](./assets/wechat.png)
-[![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/74my3Wkn)
+A lightweight daemon that keeps Claude Code running continuously until your task is complete. No Slack, no database, no multi-agent workflows—just a simple state machine that calls Claude Code via Docker and watches for completion signals.
 
-</div>
+## What It Does
 
-Have Claude Code Pro but not using it at night? Transform it into an AgentOS that handles your ideas and tasks while you sleep. This is a 24/7 AI assistant daemon powered by Claude Code CLI and Python Agent SDK that processes both random thoughts and serious tasks via Slack with isolated workspaces.
+Sleepless Agent does exactly one thing:
 
-## 📰 News
+> Before Claude Code stops, know "what to do next" and continue calling it.
 
-- **[2025-10-26]** 🎉 Initial release v0.1.0 - Full AgentOS with multi-agent workflow support
-- **[2025-10-25]** 🚀 Added task auto-generation with configurable strategies
-- **[2025-10-24]** 🔧 Integrated Git management with automatic PR creation
-- **[2025-10-23]** 📊 Implemented isolated workspaces for parallel task execution
-- **[2025-10-22]** 💡 Added Claude Code Python Agent SDK integration
-
-## 🎬 Demo
-
-<div align="center">
-  <img src="assets/sleepless.png" alt="Sleepless Agent System Architecture" width="700">
-  <p><em>System architecture showing task flow from Slack to workspace execution</em></p>
-</div>
-
-<div align="center">
-  <img src="assets/cli.png" alt="Sleepless Agent CLI Demo" width="800">
-  <p><em>Sleepless Agent CLI in action - managing tasks, checking status, and generating reports</em></p>
-</div>
-
-### Quick Example
-
-```bash
-# Start the daemon
-$ sle daemon
-2025-10-26 03:30:12 | INFO | Sleepless Agent starting...
-2025-10-26 03:30:12 | INFO | Slack bot connected
-
-# Submit a task via Slack
-/think Implement OAuth2 authentication -p backend
-
-# Check status
-$ sle check
-╭─────────────────── System Status ───────────────────╮
-│ 🟢 Daemon: Running                                  │
-│ 📊 Queue: 3 pending, 1 in_progress                  │
-│ 💻 Usage: 45% (Day threshold: 95%)                  │
-│ 🔄 Last task: "Implement OAuth2..." (in progress)   │
-╰─────────────────────────────────────────────────────╯
-
-# View results
-$ sle report 42
-Task #42: ✅ Completed
-Branch: feature/backend-42
-PR: https://github.com/user/repo/pull/123
+```
+┌──────────┐     ┌───────────┐     ┌─────────────┐     ┌─────────┐
+│   INIT   │ ──▶ │ CHECK_CTX │ ──▶ │ RUN_CLAUDE  │ ──▶ │ OBSERVE │
+└──────────┘     └───────────┘     └─────────────┘     └────┬────┘
+                                                            │
+                                   ┌────────────────────────┴────────────────────────┐
+                                   │                                                 │
+                                   ▼                                                 ▼
+                            STATUS: CONTINUE                                  STATUS: DONE
+                                   │                                                 │
+                                   └──────▶ RUN_CLAUDE                         ▼
+                                                                              IDLE
 ```
 
-## ✨ Features
+## Quick Start
 
-- 🤖 **Continuous Operation**: Runs 24/7 daemon, always ready for new tasks
-- 💬 **Slack Integration**: Submit tasks via Slack commands
-- 💭 **Interactive Chat Mode**: Real-time conversational sessions with Claude in Slack threads
-- 🎯 **Hybrid Autonomy**: Auto-applies random thoughts, requires review for serious tasks
-- ⚡ **Smart Scheduling**: Optimizes task execution based on priorities
-- 📊 **Task Queue**: SQLite-backed persistent task management
-- 🔌 **Claude Code SDK**: Uses Python Agent SDK to interface with Claude Code CLI
-- 🏗️ **Isolated Workspaces**: Each task gets its own workspace for true parallelism
-- 📝 **Result Storage**: All outputs saved with metadata for future reference
-
-## ⚙️ Prerequisites
+### Prerequisites
 
 - Python 3.11+
-- Slack workspace admin access
-- Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`)
-- Git (for auto-commits)
-- gh CLI (optional, for PR automation)
+- Docker with Claude Code container running
+- Claude Code CLI installed in the container
 
-## 🚀 Quick Start
-
-### 1. Install
+### Installation
 
 ```bash
-pip install sleepless-agent
-```
-
-Or for development:
-```bash
-git clone <repo>
+# Clone and install
+git clone https://github.com/context-machine-lab/sleepless-agent.git
 cd sleepless-agent
-python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
 pip install -e .
 ```
 
-### 2. Setup Slack App
-
-Visit https://api.slack.com/apps and create a new app:
-
-**Basic Information**
-- Choose "From scratch"
-- Name: "Sleepless Agent"
-- Pick your workspace
-
-**Enable Socket Mode**
-- Settings > Socket Mode > Toggle ON
-- Generate app token (starts with `xapp-`)
-
-**Create Slash Commands**
-Settings > Slash Commands > Create New Command:
-- `/think` - Capture thought or task (use `-p project-name` for serious tasks)
-- `/chat` - Start interactive chat mode with Claude
-- `/check` - Check queue status
-- `/usage` - Show Claude Code Pro plan usage
-- `/cancel` - Cancel task or project
-- `/report` - Show reports or task details
-- `/trash` - Manage trash (list, restore, empty)
-
-**OAuth Scopes**
-Features > OAuth & Permissions > Bot Token Scopes:
-- `chat:write`
-- `commands`
-- `app_mentions:read`
-- `channels:history` (for chat mode)
-- `groups:history` (for chat mode in private channels)
-- `reactions:write` (for chat mode indicators)
-
-**Event Subscriptions** (for Chat Mode)
-Features > Event Subscriptions > Enable Events > Subscribe to bot events:
-- `message.channels`
-- `message.groups`
-
-**Install App**
-- Install to workspace
-- Get bot token (starts with `xoxb-`)
-
-### 3. Configure Environment
+### Basic Usage
 
 ```bash
-cp .env.example .env
-nano .env  # Edit with your tokens
+# 1. Set a prompt for Claude to execute
+sle prompt "Implement the authentication feature described in .claude/plan.md. Output STATUS: DONE when complete, STATUS: CONTINUE if more work needed."
+
+# 2. Start the daemon
+sle start -w ./workspace -c claude-cc
+
+# 3. Check status (in another terminal)
+sle status -w ./workspace
+
+# 4. Stop the daemon
+sle stop -w ./workspace
 ```
 
-Set:
-- `SLACK_BOT_TOKEN` - xoxb-... token
-- `SLACK_APP_TOKEN` - xapp-... token
+### How Continuation Works
 
-(Claude API key no longer needed - uses Claude Code CLI)
+Claude must output one of these signals:
+- `STATUS: DONE` — Task complete, daemon goes idle
+- `STATUS: CONTINUE` — More work needed, daemon loops back
+- Or create a `.claude/done.flag` file in the workspace
 
-### 4. Run
+**Example prompt:**
+```
+Continue implementing the feature in .claude/plan.md.
+
+When you complete a step, evaluate if more work is needed:
+- If more work needed: end with "STATUS: CONTINUE"
+- If all work complete: end with "STATUS: DONE"
+```
+
+## CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `sle start` | Start the supervisor daemon |
+| `sle stop` | Stop the daemon / clear prompt |
+| `sle status` | Show current state (JSON) |
+| `sle prompt "..."` | Set a new prompt to execute |
+
+### Options
 
 ```bash
-sle daemon
+sle --workspace ./my-project    # Set workspace directory (default: ./workspace)
+sle --container my-claude       # Set Docker container name (default: claude-cc)
+sle --timeout 7200              # Set timeout in seconds (default: 3600)
 ```
 
-You should see startup logs similar to:
-```
-2025-10-24 23:30:12 | INFO     | sleepless_agent.interfaces.bot.start:50 Slack bot started and listening for events
-2025-10-24 23:30:12 | INFO     | sleepless_agent.runtime.daemon.run:178 Sleepless Agent starting...
-```
-Logs are rendered with Rich for readability; set `SLEEPLESS_LOG_LEVEL=DEBUG` to increase verbosity.
+## Configuration
 
-
-## 💬 Slack Commands
-
-All Slack commands align with the CLI commands for consistency:
-
-### 📋 Task Management
-
-| Command | Purpose | Example |
-|---------|---------|---------|
-| `/think` | Capture random thought | `/think Explore async ideas` |
-| `/think -p <project>` | Add serious task to project | `/think Add OAuth2 support -p backend` |
-| `/check` | Show system status | `/check` |
-| `/usage` | Show Claude Code Pro usage | `/usage` |
-| `/cancel` | Cancel task or project | `/cancel 5` or `/cancel my-app` |
-
-### 💭 Interactive Chat Mode
-
-Start a real-time conversation with Claude in a dedicated Slack thread:
-
-| Command | Purpose | Example |
-|---------|---------|---------|
-| `/chat <project>` | Start chat mode for a project | `/chat my-backend` |
-| `/chat end` | End current chat session | `/chat end` |
-| `/chat status` | Check active session status | `/chat status` |
-| `/chat help` | Show chat mode help | `/chat help` |
-
-**Chat Mode Features:**
-- 🧵 Dedicated thread for each session
-- 💬 Full conversation history maintained
-- 🔄 Real-time processing indicator
-- 📁 Claude can read/write/edit files in project workspace
-- ⏱️ Auto-timeout after 30 minutes of inactivity
-- Type `exit` in thread to end session
-
-> 💡 **Note**: When you run `/chat <project>`, a new thread is created. All your prompts must be sent **inside this thread** - Claude only responds to messages within the chat thread, not in the main channel.
-
-### 📊 Reporting & Trash
-
-| Command | Purpose | Example |
-|---------|---------|---------|
-| `/report` | Today's report, task details, date/project report, or list all | `/report`, `/report 42`, `/report 2025-10-22`, `/report my-app`, `/report --list` |
-| `/trash` | List, restore, or empty trash | `/trash list`, `/trash restore my-app`, `/trash empty` |
-
-## ⌨️ Command Line Interface
-
-Install the project (or run within the repo) and use the bundled CLI:
+### Environment Variables
 
 ```bash
-python -m sleepless_agent.interfaces.cli think "Ship release checklist" -p my-app
-# or, after installing the package:
-sle check
+# Core settings
+SLEEPLESS_WORKSPACE=./workspace    # Workspace directory
+SLEEPLESS_CONTAINER=claude-cc      # Docker container name
+SLEEPLESS_TIMEOUT=3600             # Execution timeout (seconds)
 ```
 
-The CLI mirrors the Slack slash commands:
+Copy `.env.example` to `.env` and customize as needed.
 
-| Command | Purpose | Example |
-|---------|---------|---------|
-| `think <description>` | Capture a random thought | `think "Explore async patterns"` |
-| `think <description> -p <project>` | Queue a serious task to project | `think "Build onboarding flow" -p backend` |
-| `check` | Show system health, queue, and performance metrics | `check` |
-| `usage` | Show Claude Code Pro plan usage | `usage` |
-| `report [identifier]` | Show task details, daily reports, or project summaries (`--list` for all reports) | `report 7` |
-| `cancel <identifier>` | Move a task or project to trash | `cancel 9` or `cancel my-app` |
-| `trash [subcommand] [identifier]` | Manage trash (list, restore, empty) | `trash restore my-app` |
+## State File
 
-Override storage locations when needed:
+The daemon maintains state in `{workspace}/.claude/state.json`:
+
+```json
+{
+  "status": "running",
+  "current_prompt": "Implement auth feature...",
+  "workspace": "/path/to/workspace",
+  "started_at": "2025-01-06T10:30:00Z",
+  "last_output": "Last 5KB of Claude output...",
+  "iteration_count": 3,
+  "error": null
+}
+```
+
+**Status values:**
+- `idle` — No task, waiting for prompt
+- `pending` — Prompt set, ready to execute
+- `running` — Claude is executing
+- `error` — Execution failed
+
+## Zulip Observability (Optional)
+
+Enable read-only event reporting to Zulip for monitoring task execution. Zulip acts as a dashboard—it never controls execution.
+
+### Setup
 
 ```bash
-sle --db-path ./tmp/tasks.db --results-path ./tmp/results check
+export ZULIP_ENABLED=true
+export ZULIP_SITE=https://your-org.zulipchat.com
+export ZULIP_EMAIL=sleepless-bot@your-org.zulipchat.com
+export ZULIP_API_KEY=your-api-key
+export ZULIP_STREAM=sleepless
 ```
 
-## 🏗️ Architecture
+### Events Reported
 
-```
-Slack Bot
-    ↓
-Slack Commands → Task Queue (SQLite)
-    ↓
-Agent Daemon (Event Loop)
-    ↓
-Claude Executor (Claude Code CLI)
-    ↓
-Result Manager (Storage + Git)
-```
+| Event | When | Example |
+|-------|------|---------|
+| `EXEC_START` | Before Claude runs | ▶️ EXEC #3 started |
+| `EXEC_OUTPUT` | After Claude returns | 🧠 Claude output: STATUS: CONTINUE |
+| `FILE_CHANGE` | Files modified | 📁 Files modified: src/auth.rs |
+| `STALL/WARN` | No progress for 10min | ⚠️ No progress detected |
+| `DONE` | Task complete | ✅ Task completed |
 
-### Components
+Each task gets a unique Zulip topic: `task-20250106-143052-a1b2c3`
 
-- **daemon.py**: Main event loop, task orchestration
-- **bot.py**: Slack interface, command parsing
-- **task_queue.py**: Task CRUD, priority scheduling
-- **claude_code_executor.py**: Python Agent SDK wrapper with isolated workspace management
-- **results.py**: Result storage, file management
-- **models.py**: SQLAlchemy models for Task, Result
-- **config.yaml**: Configuration defaults
-- **git_manager.py**: Git automation (commits, PRs)
-- **monitor.py**: Health checks and metrics
+### Design Principles
 
-## 📁 File Structure
+- **One-way only**: Sleepless → Zulip (never reads from Zulip)
+- **No control impact**: Zulip failures are logged, never thrown
+- **No intelligent judgment**: Reporter just relays events
+
+## Project Structure
 
 ```
 sleepless-agent/
 ├── src/sleepless_agent/
-│   ├── __init__.py
-│   ├── daemon.py           # Main event loop
-│   ├── bot.py              # Slack interface
-│   ├── task_queue.py       # Task management
-│   ├── claude_code_executor.py  # Claude CLI wrapper
-│   ├── scheduler.py        # Smart scheduling
-│   ├── git_manager.py      # Git automation
-│   ├── monitor.py          # Health & metrics
-│   ├── models.py           # Database models
-│   ├── results.py          # Result storage
-│   └── config.yaml         # Config defaults
-├── workspace/              # All persistent data and task workspaces
-│   ├── data/               # Persistent storage
-│   │   ├── tasks.db        # SQLite database
-│   │   ├── results/        # Task output files
-│   │   ├── reports/        # Daily markdown reports
-│   │   ├── agent.log       # Application logs
-│   │   └── metrics.jsonl   # Performance metrics
-│   ├── tasks/              # Task workspaces (task_1/, task_2/, etc.)
-│   ├── projects/           # Project workspaces
-│   └── trash/              # Soft-deleted projects
-├── .env                    # Secrets (not tracked)
-├── pyproject.toml          # Python package metadata & dependencies
-├── README.md              # This file
-└── docs/                  # Additional documentation
+│   ├── __init__.py           # Version
+│   ├── __main__.py           # Entry point
+│   ├── cli.py                # CLI commands
+│   ├── config.py             # Configuration loading
+│   ├── core/
+│   │   ├── daemon.py         # State machine loop
+│   │   ├── executor.py       # Docker subprocess execution
+│   │   └── state.py          # JSON state management
+│   └── reporters/
+│       ├── base.py           # BaseReporter + NoopReporter
+│       └── zulip_reporter.py # Zulip integration
+├── .env.example              # Environment template
+├── pyproject.toml            # Package config
+└── README.md                 # This file
 ```
 
-## ⚙️ Configuration
+## Architecture
 
-Runtime settings come from environment variables loaded via `.env` (see `.env.example`). Update those values or export them in your shell to tune agent behavior.
+### What This Is
 
-### Usage Management
+A **minimal supervisor runtime** that:
+- Runs Claude Code via `docker exec`
+- Parses stdout for continuation signals
+- Loops until `STATUS: DONE` or timeout
+- Optionally reports events to Zulip
 
-The agent automatically monitors Claude Code usage and intelligently manages task execution based on configurable thresholds.
+### What This Is NOT
 
-**How it works:**
+- ❌ Not a task queue (single active task)
+- ❌ Not a Slack bot (no chat interface)
+- ❌ Not a multi-agent system (Claude does everything)
+- ❌ Not a Git automation tool (no auto-commits)
+- ❌ No database (JSON state file only)
 
-1. **Usage Monitoring** - Every task checks usage via `claude /usage` command
-2. **Time-based Thresholds** - Different thresholds for day and night operations
-3. **Smart Scheduling** - Automatically pauses task generation when threshold is reached
-4. **Automatic Resume** - Tasks resume when usage resets
+### Design Principles
 
-**Time-Based Configuration (configurable in `config.yaml`):**
-- **Nighttime (1 AM - 9 AM by default):** 96% threshold - agent works aggressively while you sleep
-- **Daytime (9 AM - 1 AM by default):** 95% threshold - preserves capacity for your manual usage
-- Configure via: `claude_code.threshold_day`, `claude_code.threshold_night`
-- Time ranges via: `claude_code.night_start_hour`, `claude_code.night_end_hour`
+1. **Deletion > Addition** — Minimal code, minimal features
+2. **No intelligent judgment** — All decisions come from Claude's output
+3. **All state in workspace** — Single JSON file, no external dependencies
 
-**Visibility:**
-- Dashboard: Shows usage percentage in `sle check`
-- Logs: Each usage check logs current usage with applicable threshold
-- Config: All thresholds and time ranges adjustable in `config.yaml`
+## Docker Setup
 
-**Behavior at threshold:**
-- ⏸️ New task generation pauses at threshold
-- ✅ Running tasks complete normally
-- 📋 Pending tasks wait in queue
-- ⏱️ Automatic resume when usage resets
-
-### Git Management
-
-The agent integrates deeply with Git for automatic version control and collaboration:
-
-**Remote Repository Configuration (`config.yaml`):**
-- `git.use_remote_repo`: Enable/disable remote repository integration
-- `git.remote_repo_url`: Your remote repository URL (e.g., `git@github.com:username/repo.git`)
-- `git.auto_create_repo`: Automatically create repository if it doesn't exist
-
-**Git Workflow:**
-- **Random Thoughts**: Auto-commits to `thought-ideas` branch
-- **Serious Tasks (-p flag)**: Creates feature branches (`feature/<project>-<task_id>`) and opens PRs
-- **Automatic Commits**: Each task completion triggers a commit with descriptive messages
-- **PR Creation**: Serious tasks automatically create pull requests for review
-
-**Important:** Update `git.remote_repo_url` in `config.yaml` before running the agent!
-
-### Multi-Agent Workflow
-
-The agent employs a sophisticated multi-agent architecture for complex task processing:
-
-**Agent Types (`config.yaml`):**
-- **Planner Agent**: Analyzes tasks and creates execution plans (max 3 turns by default)
-- **Worker Agent**: Executes the planned tasks (max 3 turns by default)
-- **Evaluator Agent**: Reviews and validates completed work (max 3 turns by default)
-
-**Configuration:**
-```yaml
-multi_agent_workflow:
-  planner:
-    enabled: true
-    max_turns: 3
-  worker:
-    enabled: true
-    max_turns: 3
-  evaluator:
-    enabled: true
-    max_turns: 3
-```
-
-Each agent can be independently enabled/disabled and configured with different turn limits to control execution depth.
-
-### Task Auto-Generation
-
-The agent can automatically generate tasks to keep itself productive during idle time:
-
-**Generation Strategies (`config.yaml`):**
-- **refine_focused (45% weight)**: Focuses on completing or improving existing work
-- **balanced (35% weight)**: Mix of refinements and new tasks based on workspace state
-- **new_friendly (20% weight)**: Prioritizes creating innovative new projects
-
-**Task Types:**
-- **[NEW]**: Creates a new task in an isolated workspace (`workspace/tasks/<task_id>/`)
-- **[REFINE:#<id>]**: Improves specific existing task (reuses task workspace)
-- **[REFINE]**: General refinement of workspace projects
-
-**Workspace Constraints:**
-- Each task executes in its own isolated directory
-- Tasks only access their workspace and `workspace/shared/`
-- System directories (`workspace/data/`) are protected
-- REFINE tasks reuse existing workspaces for continuity
-
-
-## 🔧 Environment Variables
+Sleepless expects Claude Code to be running in a Docker container:
 
 ```bash
-# Required
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
+# Example: Run Claude Code in Docker
+docker run -d --name claude-cc \
+  -v $(pwd)/workspace:/workspace \
+  your-claude-code-image
+
+# Verify Claude is accessible
+docker exec claude-cc claude --version
 ```
 
-**Note:** Most configuration is done via `config.yaml`. Environment variables are primarily for secrets and deployment-specific settings.
-
-## 📝 Task Types
-
-The agent intelligently processes different task types:
-
-1. **Random Thoughts** - Auto-commits to `thought-ideas` branch
-   ```
-   /think Research async patterns in Rust
-   /think What's the best way to implement caching?
-   ```
-
-2. **Serious Tasks** - Creates feature branch and PR, requires review (use `-p` flag)
-   ```
-   /think -p backend Add authentication to user service
-   /think -p payments Refactor payment processing module
-   ```
-
-## 📊 Monitoring
-
-### Slack Commands
-```
-/check    # System status and performance stats
-/report --list  # Available reports
-```
-
-## 🚢 Deployment
-
-### Linux (systemd)
+The daemon calls:
 ```bash
-make install-service
-sudo systemctl start sleepless-agent
+docker exec -w /workspace claude-cc claude -p "your prompt"
 ```
 
-### macOS (launchd)
+## Troubleshooting
+
+### Daemon won't start
+
 ```bash
-make install-launchd
-launchctl list | grep sleepless
+# Check if Docker container is running
+docker ps | grep claude-cc
+
+# Check if Claude CLI is accessible
+docker exec claude-cc claude --version
 ```
 
-## 💡 Example Workflows
+### Task stuck in loop
 
-### Daily Brainstorm
-```
-/think Research new Rust async libraries
-/think Compare Python web frameworks
-/think Ideas for improving API performance
-/check
-```
+Check the prompt—Claude must output `STATUS: DONE` or `STATUS: CONTINUE`. If neither appears in the last 20 lines, the daemon defaults to continue.
 
-### Production Fix
-```
-/think Fix authentication bug in login endpoint -p backend
-/report <id>     # Get the PR link
-# Review and merge PR
+### Check state file
+
+```bash
+cat workspace/.claude/state.json | jq .
 ```
 
-### Code Audit
-```
-/think Security audit of user service -p backend
-/think Performance analysis of payment module -p payments
-```
+### Force stop
 
-## ⚡ Performance Tips
+```bash
+# Clear the prompt to stop after current iteration
+sle stop -w ./workspace
 
-1. **Use thoughts to fill idle time** - Maximizes usage
-2. **Batch serious tasks** - Reduces context switching
-3. **Monitor usage** - Watch scheduler logs for usage patterns
-4. **Review git history** - Check `thought-ideas` branch regularly
-5. **Check metrics** - Run `sle check` to track performance
-
-## 📦 Releases
-
-- Latest stable: **0.1.0** – published on [PyPI](https://pypi.org/project/sleepless-agent/0.1.0/)
-- Install or upgrade with `pip install -U sleepless-agent`
-- Release notes tracked via GitHub Releases (tag `v0.1.0` onward)
-
-## 📚 Documentation
-
-For more detailed information and guides:
-
-- **[Full Documentation](https://context-machine-lab.github.io/sleepless-agent/)** - Complete documentation site
-- **[DeepWiki](https://deepwiki.com/context-machine-lab/sleepless-agent)** - Interactive knowledge base
-- **[Installation Guide](docs/installation.md)** - Detailed setup instructions
-- **[Quick Start](docs/quickstart.md)** - Get up and running quickly
-- **[FAQ](docs/faq.md)** - Frequently asked questions
-- **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
-
-## 🗺️ Roadmap
-
-- [ ] **Advanced Scheduling** - Priority queue with time-based and dependency scheduling
-- [ ] **Daily Report** - Daily report of the agent's work
-
-## 🙏 Acknowledgements
-
-We are deeply grateful to the open-source community and the projects that make Sleepless Agent possible:
-
-- **[Claude Code CLI](https://github.com/anthropics/claude-code)** - For providing the powerful foundation for AI-assisted development and the Python Agent SDK that enables seamless integration
-- **[Slack Bolt](https://github.com/slackapi/bolt-python)** - For reliable real-time messaging and command handling that powers our Slack integration
-- **[SQLAlchemy](https://www.sqlalchemy.org/)** - For robust data persistence and elegant ORM that manages our task queue
-- **[Rich](https://github.com/Textualize/rich)** - For beautiful terminal rendering that makes logs and outputs visually appealing
-- **[GitPython](https://github.com/gitpython-developers/GitPython)** - For comprehensive Git operations that enable our automated version control workflows
-
-## 🤝 Contributing
-
-We welcome contributions! Sleepless Agent is designed to be a community resource for 24/7 AI development automation.
-
-Please see our [Contributing Guidelines](CONTRIBUTING.md) for:
-- Development setup and environment configuration
-- Code style and testing requirements
-- How to submit pull requests
-- Community guidelines and code of conduct
-
-Feel free to:
-- 🐛 [Report bugs](https://github.com/context-machine-lab/sleepless-agent/issues/new?labels=bug)
-- 💡 [Suggest features](https://github.com/context-machine-lab/sleepless-agent/issues/new?labels=enhancement)
-- 💬 [Ask questions](https://github.com/context-machine-lab/sleepless-agent/discussions)
-- 🔧 [Submit pull requests](https://github.com/context-machine-lab/sleepless-agent/pulls)
-
-## 📖 Citation
-
-If you use Sleepless Agent in your research or projects, please cite:
-
-```bibtex
-@software{sleepless_agent_2025,
-  title = {Sleepless Agent: A 24/7 AgentOS for Continuous Development},
-  author = {Zhimeng Guo, Hangfan Zhang, Siyuan Xu, Huaisheng Zhu, Teng Xiao, Minhao Cheng},
-  year = {2025},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  url = {https://github.com/context-machine-lab/sleepless-agent}
-}
+# Or manually:
+echo '{"status":"idle","current_prompt":null}' > workspace/.claude/state.json
 ```
 
-## 📄 License
+## License
 
-Released under the [MIT License](LICENSE)
+MIT License - See [LICENSE](LICENSE)
 
-## 🔧 Development
+## Contributing
 
-Tested Sleepless Agent integration on 2025-12-15.
+Issues and pull requests welcome at [GitHub](https://github.com/context-machine-lab/sleepless-agent).

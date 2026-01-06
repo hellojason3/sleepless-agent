@@ -7,14 +7,14 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/usr/local/bin/sle</string>
-		<string>daemon</string>
+		<string>start</string>
 	</array>
 	<key>WorkingDirectory</key>
 	<string>/Users/YOUR_USERNAME/projects/sleepless-agent</string>
 	<key>StandardOutPath</key>
-	<string>/Users/YOUR_USERNAME/projects/sleepless-agent/workspace/data/daemon.log</string>
+	<string>/Users/YOUR_USERNAME/projects/sleepless-agent/workspace/daemon.log</string>
 	<key>StandardErrorPath</key>
-	<string>/Users/YOUR_USERNAME/projects/sleepless-agent/workspace/data/daemon.err</string>
+	<string>/Users/YOUR_USERNAME/projects/sleepless-agent/workspace/daemon.err</string>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>

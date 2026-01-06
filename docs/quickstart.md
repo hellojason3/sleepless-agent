@@ -1,183 +1,172 @@
-# Quickstart Guide
+# Quickstart
 
-Get Sleepless Agent running in 5 minutes! This guide covers the minimal setup needed to start processing tasks.
+Get Sleepless Agent running in 5 minutes.
 
 ## Prerequisites
 
-Before starting, ensure you have:
+- Python 3.11+
+- Docker with Claude Code container running
+- Claude Code CLI installed in the container
 
-- ✅ Python 3.11+ installed
-- ✅ Node.js 16+ installed
-- ✅ Slack workspace access
-- ✅ Claude Code CLI installed
-
-## Step 1: Install Claude Code CLI
+## Installation
 
 ```bash
-npm install -g @anthropic-ai/claude-code
-```
-
-Verify installation:
-```bash
-claude --version
-```
-
-## Step 2: Install Sleepless Agent
-
-```bash
-pip install sleepless-agent
-```
-
-Or from source:
-```bash
-git clone https://github.com/context-machine-lab/sleepless-agent
+# Clone and install
+git clone https://github.com/context-machine-lab/sleepless-agent.git
 cd sleepless-agent
-pip install -e .
+uv sync  # or: pip install -e .
 ```
 
-## Step 3: Quick Slack Setup
+## Basic Usage
 
-1. Visit [https://api.slack.com/apps](https://api.slack.com/apps)
-2. Click "Create New App" → "From scratch"
-3. Name it "Sleepless Agent" and select your workspace
-
-### Enable Socket Mode
-- Go to Settings → Socket Mode → Enable
-- Create an app-level token (name: "sleepless-token")
-- Save the `xapp-...` token
-
-### Add Slash Commands
-Go to Features → Slash Commands and create:
-- `/think` - Submit tasks
-- `/check` - Check status
-- `/chat` - Interactive chat mode with Claude
-- `/usage` - Show Claude Code Pro plan usage
-
-### Set Bot Permissions
-Features → OAuth & Permissions → Bot Token Scopes:
-- `chat:write`
-- `commands`
-- `channels:history` (for chat mode)
-- `reactions:write` (for chat mode)
-
-### Enable Events (for Chat Mode)
-Features → Event Subscriptions → Enable Events → Subscribe to bot events:
-- `message.channels`
-- `message.groups`
-
-### Install to Workspace
-- Click "Install to Workspace"
-- Save the `xoxb-...` bot token
-
-## Step 4: Configure Environment
-
-Create a `.env` file:
+### 1. Set a prompt
 
 ```bash
-# Required Slack tokens
-SLACK_BOT_TOKEN=xoxb-your-bot-token-here
-SLACK_APP_TOKEN=xapp-your-app-token-here
-
-# Optional: Custom workspace location
-AGENT_WORKSPACE=./workspace
+sle prompt "Implement the authentication feature described in .claude/plan.md. Output STATUS: DONE when complete, STATUS: CONTINUE if more work needed."
 ```
 
-## Step 5: Start the Agent
+### 2. Start the daemon
 
 ```bash
-sle daemon
+sle start -w ./workspace -c claude-cc
 ```
 
-You should see:
-```
-2025-10-24 23:30:12 | INFO | Sleepless Agent starting...
-2025-10-24 23:30:12 | INFO | Slack bot started and listening for events
-```
+### 3. Check status (in another terminal)
 
-## Step 6: Test Your Setup
-
-In Slack, try these commands:
-
-```
-/think Research Python async patterns
-/check
+```bash
+sle status -w ./workspace
 ```
 
-The agent should acknowledge your task and show the queue status.
+### 4. Stop the daemon
 
-### Try Chat Mode
-
-Start an interactive session with Claude:
-
-```
-/chat my-project
+```bash
+sle stop -w ./workspace
 ```
 
-This creates a **Slack thread** where you can have a real-time conversation with Claude.
+## How Continuation Works
 
-> ⚠️ **Important**: All messages to Claude must be sent **inside the thread**, not in the main channel. Claude will only respond to messages within the chat thread.
+Claude must output one of these signals:
 
-In the thread, try:
+- `STATUS: DONE` — Task complete, daemon goes idle
+- `STATUS: CONTINUE` — More work needed, daemon loops back
+- Or create a `.claude/done.flag` file in the workspace
+
+**Example prompt:**
+
 ```
-Create a hello world Python script
+Continue implementing the feature in .claude/plan.md.
+
+When you complete a step, evaluate if more work is needed:
+- If more work needed: end with "STATUS: CONTINUE"
+- If all work complete: end with "STATUS: DONE"
 ```
 
-To end the session, type `exit` in the thread or use `/chat end`.
+## CLI Commands
 
-## What's Next?
+| Command | Description |
+|---------|-------------|
+| `sle start` | Start the supervisor daemon |
+| `sle stop` | Stop the daemon / clear prompt |
+| `sle status` | Show current state (JSON) |
+| `sle prompt "..."` | Set a new prompt to execute |
 
-### Essential Configuration
+### Options
 
-1. **Set up Git integration** for automated commits:
-   ```bash
-   git config --global user.name "Sleepless Agent"
-   git config --global user.email "agent@sleepless.local"
-   ```
+```bash
+sle --workspace ./my-project    # Set workspace directory (default: ./workspace)
+sle --container my-claude       # Set Docker container name (default: claude-cc)
+sle --timeout 7200              # Set timeout in seconds (default: 3600)
+```
 
-2. **Configure Pro plan thresholds** in `config.yaml`:
-   ```yaml
-   claude_code:
-     threshold_day: 20.0    # Pause at 20% during day
-     threshold_night: 80.0  # Pause at 80% at night
-   ```
+## Configuration
 
-3. **Set working hours** for optimal usage:
-   ```yaml
-   claude_code:
-     night_start_hour: 20  # 8 PM
-     night_end_hour: 8     # 8 AM
-   ```
+### Environment Variables
 
-### Recommended Next Steps
+```bash
+# Core settings
+SLEEPLESS_WORKSPACE=./workspace    # Workspace directory
+SLEEPLESS_CONTAINER=claude-cc      # Docker container name
+SLEEPLESS_TIMEOUT=3600             # Execution timeout (seconds)
+```
 
-- 📖 Read the [Architecture Overview](concepts/architecture.md)
-- 🔧 Complete [Slack Setup](guides/slack-setup.md) for all features
-- 🎯 Try the [First Task Tutorial](tutorials/first-task.md)
-- 📊 Learn about [Task Management](guides/project-management.md)
+Copy `.env.example` to `.env` and customize as needed.
 
-## Common Issues
+## State File
 
-### Agent not responding in Slack?
-- Verify Socket Mode is enabled
-- Check both tokens are correct in `.env`
-- Ensure the bot is in your channel
+The daemon maintains state in `{workspace}/.claude/state.json`:
 
-### Tasks not executing?
-- Run `claude --version` to verify CLI installation
-- Check `sle check` for usage limits
-- Review logs: `tail -f workspace/data/agent.log`
+```json
+{
+  "status": "running",
+  "current_prompt": "Implement auth feature...",
+  "workspace": "/path/to/workspace",
+  "started_at": "2025-01-06T10:30:00Z",
+  "last_output": "Last 5KB of Claude output...",
+  "iteration_count": 3,
+  "error": null
+}
+```
 
-### Usage threshold reached?
-- Agent pauses at configured thresholds
-- Wait for 5-hour window reset
-- Adjust thresholds in `config.yaml` if needed
+**Status values:**
 
-## Getting Help
+- `idle` — No task, waiting for prompt
+- `pending` — Prompt set, ready to execute
+- `running` — Claude is executing
+- `error` — Execution failed
 
-- 💬 [Discord Community](https://discord.gg/74my3Wkn)
-- 📚 [Full Documentation](index.md)
-- 🐛 [Report Issues](https://github.com/context-machine-lab/sleepless-agent/issues)
+## Docker Setup
 
----
+Sleepless expects Claude Code to be running in a Docker container:
 
-🎉 **Congratulations!** You now have a 24/7 AI agent working for you. Check out the [tutorials](tutorials/first-task.md) to learn more advanced features.
+```bash
+# Example: Run Claude Code in Docker
+docker run -d --name claude-cc \
+  -v $(pwd)/workspace:/workspace \
+  your-claude-code-image
+
+# Verify Claude is accessible
+docker exec claude-cc claude --version
+```
+
+The daemon calls:
+
+```bash
+docker exec -w /workspace claude-cc claude -p "your prompt"
+```
+
+## Troubleshooting
+
+### Daemon won't start
+
+```bash
+# Check if Docker container is running
+docker ps | grep claude-cc
+
+# Check if Claude CLI is accessible
+docker exec claude-cc claude --version
+```
+
+### Task stuck in loop
+
+Check the prompt—Claude must output `STATUS: DONE` or `STATUS: CONTINUE`. If neither appears in the last 20 lines, the daemon defaults to continue.
+
+### Check state file
+
+```bash
+cat workspace/.claude/state.json | jq .
+```
+
+### Force stop
+
+```bash
+# Clear the prompt to stop after current iteration
+sle stop -w ./workspace
+
+# Or manually:
+echo '{"status":"idle","current_prompt":null}' > workspace/.claude/state.json
+```
+
+## Next Steps
+
+- See the [README](https://github.com/context-machine-lab/sleepless-agent) for Zulip observability setup
+- Check [.env.example](https://github.com/context-machine-lab/sleepless-agent/blob/main/.env.example) for all configuration options
