@@ -1,4 +1,28 @@
-"""Minimal supervisor daemon with state machine loop."""
+"""
+Sleepless Agent - 状态机守护进程模块
+
+本模块实现核心守护进程，使用状态机模式循环执行 Claude Code。
+
+状态机流转:
+    ┌─────────┐    ┌───────────┐    ┌─────────────┐    ┌─────────┐
+    │  INIT   │───▶│ CHECK_CTX │───▶│ RUN_CLAUDE  │───▶│ OBSERVE │
+    └─────────┘    └───────────┘    └─────────────┘    └────┬────┘
+                                                     │
+                            ┌────────────────────────┴────────────────┐
+                            │                                          │
+                            ▼                                          ▼
+                     STATUS: CONTINUE                           STATUS: DONE
+                            │                                          │
+                            └──────▶ RUN_CLAUDE                  ▼
+                                                              IDLE
+
+生命周期钩子（可选的 Reporter）:
+    - EXEC_START: Claude 执行前触发
+    - EXEC_OUTPUT: Claude 返回输出后触发
+    - FILE_CHANGE: 检测到文件变化时触发
+    - STALL/WARN: 长时间无进度时触发
+    - DONE: 任务完成时触发
+"""
 
 import hashlib
 import signal
@@ -16,7 +40,16 @@ from sleepless_agent.reporters.zulip_reporter import ZulipReporter
 
 
 class State(Enum):
-    """Daemon state machine states."""
+    """
+    守护进程状态机状态枚举
+
+    状态说明:
+        - INIT: 初始化状态，检查是否有待执行的提示
+        - CHECK_CTX: 检查上下文，验证工作空间是否就绪
+        - RUN_CLAUDE: 运行 Claude，执行当前提示
+        - OBSERVE: 观察状态，解析输出并决定下一步
+        - IDLE: 空闲状态，等待新提示
+    """
     INIT = "init"
     CHECK_CTX = "check_ctx"
     RUN_CLAUDE = "run_claude"
@@ -25,9 +58,18 @@ class State(Enum):
 
 
 def create_reporter(zulip_config: ZulipConfig) -> BaseReporter:
-    """Create appropriate reporter based on configuration.
+    """
+    根据配置创建适当的报告器
 
-    Returns ZulipReporter if configured, otherwise NoopReporter.
+    优先级:
+        1. 如果 Zulip 配置完整有效，返回 ZulipReporter
+        2. 否则返回 NoopReporter（空操作）
+
+    Args:
+        zulip_config: Zulip 配置对象
+
+    Returns:
+        BaseReporter: 报告器实例
     """
     if zulip_config.is_valid():
         print(f"Zulip reporter enabled: {zulip_config.stream}")
@@ -44,10 +86,30 @@ def create_reporter(zulip_config: ZulipConfig) -> BaseReporter:
 
 
 class Daemon:
-    """Minimal Claude Code supervisor daemon.
+    """
+    极简 Claude Code 监督守护进程
 
-    State Machine:
+    使用状态机模式持续执行 Claude Code，直到任务完成。
+
+    状态转换:
         INIT -> CHECK_CTX -> RUN_CLAUDE -> OBSERVE -> (loop or IDLE)
+
+    Attributes:
+        workspace: 工作空间目录路径
+        docker_container: Docker 容器名称
+        timeout: Claude 执行超时时间（秒）
+        idle_interval: 空闲时休眠间隔（秒）
+        reporter: 可观测性报告器
+        stall_threshold_minutes: 停滞检测阈值（分钟）
+        state: 当前状态机状态
+        running: 是否正在运行
+        state_manager: 状态文件管理器
+        executor: Claude 执行器
+        current_topic: 当前任务的唯一标识符
+        task_start_time: 任务开始时间戳
+        last_file_snapshot: 上次文件快照
+        last_progress_time: 上次检测到进度的时间
+        stall_warned: 是否已发出停滞警告
     """
 
     def __init__(
@@ -59,15 +121,16 @@ class Daemon:
         reporter: Optional[BaseReporter] = None,
         stall_threshold_minutes: int = 10,
     ):
-        """Initialize daemon.
+        """
+        初始化守护进程
 
         Args:
-            workspace: Path to workspace directory
-            docker_container: Name of Docker container
-            timeout: Claude execution timeout in seconds
-            idle_interval: Seconds to sleep when idle
-            reporter: Reporter for observability events
-            stall_threshold_minutes: Minutes without progress before warning
+            workspace: 工作空间目录路径
+            docker_container: Docker 容器名称
+            timeout: Claude 执行超时时间（秒）
+            idle_interval: 空闲时休眠秒数
+            reporter: 可观测性报告器（可选）
+            stall_threshold_minutes: 无进度警告阈值（分钟）
         """
         self.workspace = Path(workspace).resolve()
         self.docker_container = docker_container
@@ -75,14 +138,17 @@ class Daemon:
         self.idle_interval = idle_interval
         self.stall_threshold_minutes = stall_threshold_minutes
 
+        # 状态机初始化
         self.state = State.INIT
         self.running = False
 
+        # 核心组件
         self.state_manager = StateManager(self.workspace)
         self.executor = ClaudeExecutor(docker_container, timeout)
+        # 如果没有提供报告器，使用空操作报告器
         self.reporter = reporter or NoopReporter()
 
-        # Task tracking
+        # 任务跟踪（用于可观测性和停滞检测）
         self.current_topic: Optional[str] = None
         self.task_start_time: Optional[float] = None
         self.last_file_snapshot: Set[str] = set()
@@ -90,20 +156,38 @@ class Daemon:
         self.stall_warned: bool = False
 
     def _generate_topic(self) -> str:
-        """Generate a unique topic name for the current task."""
+        """
+        生成当前任务的唯一主题标识符
+
+        格式: task-{timestamp}-{prompt_hash}
+        例如: task-20250108-143052-a1b2c3
+
+        Returns:
+            str: 唯一的主题字符串
+        """
+        # 当前 UTC 时间戳
         timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-        # Use first 6 chars of hash of prompt for uniqueness
+        # 使用提示 MD5 哈希的前 6 位作为唯一后缀
         prompt = self.state_manager.get_prompt() or ""
         prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:6]
         return f"task-{timestamp}-{prompt_hash}"
 
     def _get_workspace_files(self) -> Set[str]:
-        """Get set of files in workspace with their mtimes."""
+        """
+        获取工作空间中的所有文件（包含修改时间）
+
+        返回格式: {"path/to/file:timestamp", ...}
+        包含 mtime 是为了检测文件内容变化。
+
+        Returns:
+            Set[str]: 文件标识符集合
+        """
         files = set()
         try:
             for path in self.workspace.rglob("*"):
+                # 跳过 .git 目录和非文件项
                 if path.is_file() and ".git" not in path.parts:
-                    # Include mtime in the identifier to detect changes
+                    # 包含修改时间以检测内容变化
                     mtime = path.stat().st_mtime
                     files.add(f"{path.relative_to(self.workspace)}:{mtime}")
         except Exception:
@@ -111,39 +195,50 @@ class Daemon:
         return files
 
     def _detect_file_changes(self) -> list:
-        """Detect changed files since last check."""
+        """
+        检测自上次检查以来的变化文件
+
+        通过比较文件名和 mtime 来检测变化。
+
+        Returns:
+            list: 变化文件列表（相对于工作空间的路径）
+        """
         current_files = self._get_workspace_files()
 
-        # Extract just filenames (without mtime) for comparison
+        # 提取文件名（不含 mtime）用于比较
         current_names = {f.rsplit(":", 1)[0] for f in current_files}
         last_names = {f.rsplit(":", 1)[0] for f in self.last_file_snapshot}
 
-        # Find changed or new files
+        # 找出变化或新增的文件
         changed = []
         for f in current_files:
             name = f.rsplit(":", 1)[0]
             if f not in self.last_file_snapshot:
                 changed.append(name)
 
+        # 更新快照
         self.last_file_snapshot = current_files
         return changed
 
     def parse_status(self, output: str) -> str:
-        """Parse Claude output for continuation signals.
+        """
+        解析 Claude 输出中的续传信号
 
-        Checks (in order):
-        1. "STATUS: DONE" in output -> done
-        2. "STATUS: CONTINUE" in output -> continue
-        3. .claude/done.flag file exists -> done
-        4. Default -> continue
+        检测顺序（优先级从高到低）:
+            1. "STATUS: DONE" → 返回 "done"
+            2. "STATUS: CONTINUE" → 返回 "continue"
+            3. .claude/done.flag 文件存在 → 返回 "done"
+            4. 默认 → 返回 "continue"
+
+        只检查最后 20 行输出，避免误报。
 
         Args:
-            output: Claude's stdout
+            output: Claude 的 stdout 输出
 
         Returns:
-            "done" or "continue"
+            str: "done" 或 "continue"
         """
-        # Check last 20 lines for status markers
+        # 检查最后 20 行中的状态标记
         lines = output.strip().split("\n")
         for line in reversed(lines[-20:]):
             if "STATUS: DONE" in line:
@@ -151,24 +246,30 @@ class Daemon:
             if "STATUS: CONTINUE" in line:
                 return "continue"
 
-        # Check done flag file
+        # 检查完成标志文件
         if self.state_manager.check_done_flag():
             return "done"
 
-        # Default to continue
+        # 默认继续执行
         return "continue"
 
     def run(self) -> None:
-        """Run the daemon main loop."""
+        """
+        运行守护进程主循环
+
+        启动前验证 Docker 容器状态，然后进入状态机循环。
+        支持 Ctrl+C 优雅退出。
+        """
         self.running = True
         print(f"Daemon started with workspace: {self.workspace}")
         print(f"Docker container: {self.docker_container}")
 
-        # Verify Docker container
+        # 启动前验证 Docker 容器
         if not self.executor.check_docker():
             print(f"ERROR: Docker container '{self.docker_container}' is not running")
             return
 
+        # 主循环
         while self.running:
             try:
                 self._step()
@@ -184,7 +285,11 @@ class Daemon:
         print("Daemon stopped")
 
     def _step(self) -> None:
-        """Execute one step of the state machine."""
+        """
+        执行状态机的一个步骤
+
+        根据当前状态调用相应的处理方法。
+        """
         if self.state == State.INIT:
             self._handle_init()
 
@@ -201,7 +306,13 @@ class Daemon:
             self._handle_idle()
 
     def _handle_init(self) -> None:
-        """Initialize: check for existing prompt."""
+        """
+        处理 INIT 状态
+
+        检查是否有待执行的提示：
+            - 有提示 → 进入 CHECK_CTX 状态
+            - 无提示 → 进入 IDLE 状态
+        """
         prompt = self.state_manager.get_prompt()
         if prompt:
             print(f"Found pending prompt: {prompt[:50]}...")
@@ -210,18 +321,23 @@ class Daemon:
             self.state = State.IDLE
 
     def _handle_check_ctx(self) -> None:
-        """Check context: verify workspace exists."""
+        """
+        处理 CHECK_CTX 状态
+
+        验证工作空间存在，初始化任务跟踪。
+        """
+        # 验证工作空间
         if not self.workspace.exists():
             print(f"ERROR: Workspace {self.workspace} does not exist")
             self.state_manager.mark_error("Workspace does not exist")
             self.state = State.IDLE
             return
 
-        # Ensure .claude directory exists
+        # 确保 .claude 目录存在
         claude_dir = self.workspace / ".claude"
         claude_dir.mkdir(parents=True, exist_ok=True)
 
-        # Start new task tracking
+        # 初始化任务跟踪
         self.current_topic = self._generate_topic()
         self.task_start_time = time.time()
         self.last_file_snapshot = self._get_workspace_files()
@@ -231,27 +347,33 @@ class Daemon:
         self.state = State.RUN_CLAUDE
 
     def _handle_run_claude(self) -> None:
-        """Run Claude: execute prompt via Docker."""
+        """
+        处理 RUN_CLAUDE 状态
+
+        执行当前提示，更新状态文件，触发 EXEC_START 钩子。
+        """
         prompt = self.state_manager.get_prompt()
         if not prompt:
             self.state = State.IDLE
             return
 
+        # 标记为运行状态
         self.state_manager.mark_running()
         state = self.state_manager.load()
         iteration = state.get("iteration_count", 0) + 1
         print(f"[Iteration {iteration}] Running Claude...")
 
-        # HOOK: EXEC_START
+        # 钩子: EXEC_START
         if self.current_topic:
             self.reporter.exec_start(self.current_topic, iteration, prompt)
 
-        # Execute Claude
+        # 执行 Claude
         output, return_code = self.executor.run(prompt, str(self.workspace))
 
-        # Update state with output
+        # 更新输出到状态文件
         self.state_manager.update_output(output)
 
+        # 检查执行结果
         if return_code != 0 and "ERROR:" in output:
             print(f"ERROR: Claude execution failed: {output[:200]}")
             self.state_manager.mark_error(output[:500])
@@ -262,25 +384,32 @@ class Daemon:
         self.state = State.OBSERVE
 
     def _handle_observe(self) -> None:
-        """Observe: check if should continue or stop."""
+        """
+        处理 OBSERVE 状态
+
+        解析输出，检测文件变化，检查停滞，决定继续或停止。
+        触发多个钩子: EXEC_OUTPUT, FILE_CHANGE, STALL/WARN, DONE
+        """
         state = self.state_manager.load()
         output = state.get("last_output", "")
         iteration = state.get("iteration_count", 0)
+
+        # 解析状态信号
         status = self.parse_status(output)
 
-        # HOOK: EXEC_OUTPUT
+        # 钩子: EXEC_OUTPUT
         if self.current_topic:
             status_text = "STATUS: DONE" if status == "done" else "STATUS: CONTINUE"
             self.reporter.exec_output(self.current_topic, status_text)
 
-        # HOOK: FILE_CHANGE
+        # 钩子: FILE_CHANGE
         changed_files = self._detect_file_changes()
         if changed_files and self.current_topic:
             self.reporter.file_change(self.current_topic, changed_files)
             self.last_progress_time = time.time()
             self.stall_warned = False
 
-        # HOOK: STALL/WARN - check for stagnation
+        # 钩子: STALL/WARN - 检查停滞
         if self.last_progress_time and not self.stall_warned:
             minutes_since_progress = (time.time() - self.last_progress_time) / 60
             if minutes_since_progress >= self.stall_threshold_minutes:
@@ -291,10 +420,11 @@ class Daemon:
                     )
                 self.stall_warned = True
 
+        # 根据状态决定下一步
         if status == "done":
             print("STATUS: DONE detected - task complete")
 
-            # HOOK: DONE
+            # 钩子: DONE
             if self.current_topic:
                 self.reporter.task_done(self.current_topic, iteration)
 
@@ -306,10 +436,14 @@ class Daemon:
             self.state = State.RUN_CLAUDE
 
     def _handle_idle(self) -> None:
-        """Idle: wait for new prompt."""
+        """
+        处理 IDLE 状态
+
+        休眠等待，定期检查是否有新提示。
+        """
         time.sleep(self.idle_interval)
 
-        # Check for new prompt
+        # 检查新提示
         prompt = self.state_manager.get_prompt()
         status = self.state_manager.get_status()
 
@@ -318,7 +452,11 @@ class Daemon:
             self.state = State.CHECK_CTX
 
     def stop(self) -> None:
-        """Stop the daemon."""
+        """
+        停止守护进程
+
+        设置 running 标志为 False，主循环将退出。
+        """
         self.running = False
 
 
@@ -327,17 +465,25 @@ def run_daemon(
     docker_container: str = "claude-cc",
     timeout: int = 3600,
 ) -> None:
-    """Run daemon with signal handling.
+    """
+    运行守护进程（带信号处理）
+
+    创建守护进程实例，注册信号处理器，启动主循环。
+
+    支持的信号:
+        - SIGINT: Ctrl+C
+        - SIGTERM: 终止信号
 
     Args:
-        workspace: Path to workspace directory
-        docker_container: Name of Docker container
-        timeout: Claude execution timeout in seconds
+        workspace: 工作空间目录路径
+        docker_container: Docker 容器名称
+        timeout: Claude 执行超时时间（秒）
     """
-    # Load config and create reporter
+    # 加载配置并创建报告器
     config = get_config()
     reporter = create_reporter(config.zulip)
 
+    # 创建守护进程
     daemon = Daemon(
         workspace=Path(workspace),
         docker_container=docker_container,
@@ -345,11 +491,14 @@ def run_daemon(
         reporter=reporter,
     )
 
+    # 注册信号处理器
     def signal_handler(sig, frame):
+        """信号处理函数"""
         print("\nReceived shutdown signal...")
         daemon.stop()
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    # 启动主循环
     daemon.run()
